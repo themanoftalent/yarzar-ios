@@ -1,6 +1,27 @@
+import AVFoundation
 import PhotosUI
 import SwiftUI
 import UIKit
+
+struct IOSCameraPreviewView: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        let layer = AVCaptureVideoPreviewLayer(session: session)
+        layer.videoGravity = .resizeAspectFill
+        layer.cornerRadius = 12
+        view.layer.addSublayer(layer)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        if let layer = uiView.layer.sublayers?.first as? AVCaptureVideoPreviewLayer {
+            layer.session = session
+            layer.frame = uiView.bounds
+        }
+    }
+}
 
 struct MobileMainView: View {
     @StateObject private var store = ProductStore()
@@ -69,29 +90,37 @@ struct MobileScannerTabView: View {
     var onSwitchToCompare: () -> Void
     @ObservedObject private var lang = LanguageManager.shared
     @ObservedObject private var theme = ThemeManager.shared
+    @StateObject private var cameraScanner = CameraBarcodeScanner()
 
     @State private var barcodeInput: String = ""
     @State private var scannerMode: Int = 0
     @State private var selectedPhotoItem: PhotosPickerItem? = nil
     @State private var customName: String = ""
-    @State private var customIngredients: String = "Sugar, Palm Oil, Hazelnuts (13%), Skimmed Milk Powder, Lecithins (E322), Sodium Nitrite (E250)"
+    @State private var customIngredients: String = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Picker("", selection: $scannerMode) {
                     Text(L("Scan Barcode")).tag(0)
-                    Text(L("Scan Photo / OCR")).tag(1)
-                    Text(L("Ingredient Analyzer")).tag(2)
+                    Text(L("Camera Scanner")).tag(1)
+                    Text(L("Scan Photo / OCR")).tag(2)
+                    Text(L("Ingredient Analyzer")).tag(3)
                 }
                 .pickerStyle(.segmented)
 
                 if scannerMode == 0 {
                     barcodePanel
                 } else if scannerMode == 1 {
+                    liveCameraPanel
+                } else if scannerMode == 2 {
                     photoOCRPanel
                 } else {
                     customIngredientPanel
+                }
+
+                if !store.liveSearchResults.isEmpty {
+                    liveSearchResultsRow
                 }
 
                 if let product = store.selectedProduct {
@@ -130,6 +159,12 @@ struct MobileScannerTabView: View {
                 }
             }
         }
+        .onChange(of: cameraScanner.lastDetectedBarcode) { _, code in
+            if let code, !code.isEmpty {
+                barcodeInput = code
+                Task { await store.lookupBarcode(code) }
+            }
+        }
         .onChange(of: selectedPhotoItem) { _, newItem in
             guard let newItem else { return }
             Task {
@@ -157,50 +192,104 @@ struct MobileScannerTabView: View {
     private var barcodePanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                TextField(L("Enter EAN-13 / UPC barcode (e.g. 3017620422003)..."), text: $barcodeInput)
+                TextField(L("Enter EAN/UPC barcode OR search any product/brand (e.g. Nutella, Ülker, CeraVe, Pınar)..."), text: $barcodeInput)
                     .textFieldStyle(.roundedBorder)
-                    .keyboardType(.numberPad)
+                    .onSubmit {
+                        Task { await store.lookupBarcode(barcodeInput) }
+                    }
 
                 Button {
                     Task { await store.lookupBarcode(barcodeInput) }
                 } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.headline)
+                    if store.isLookingUpBarcode || store.isSearchingOnline {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "magnifyingglass")
+                            .font(.headline)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(YarzarTheme.emerald)
             }
 
+            if let msg = store.lookupStatusMessage {
+                Text(msg)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(YarzarTheme.emerald)
+            }
+        }
+        .padding(14)
+        .yarzarCard(accent: YarzarTheme.emerald)
+    }
+
+    private var liveCameraPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(L("Camera Scanner"), systemImage: "camera.viewfinder")
+                    .font(.subheadline.weight(.bold))
+                Spacer()
+                Button(cameraScanner.isRunning ? L("Stop Camera") : L("Start Live Camera")) {
+                    if cameraScanner.isRunning {
+                        cameraScanner.stop()
+                    } else {
+                        cameraScanner.start()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(cameraScanner.isRunning ? YarzarTheme.crimsonPoor : YarzarTheme.emerald)
+            }
+            if cameraScanner.isRunning {
+                IOSCameraPreviewView(session: cameraScanner.session)
+                    .frame(height: 210)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            if !cameraScanner.statusText.isEmpty {
+                Text(cameraScanner.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .yarzarCard(accent: YarzarTheme.mintTeal)
+    }
+
+    private var liveSearchResultsRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(L("Live OpenFacts Database Results"), systemImage: "globe")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(YarzarTheme.emerald)
+                Spacer()
+                Button(L("Clear Results")) {
+                    store.liveSearchResults = []
+                }
+                .font(.caption2)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(store.products.prefix(8)) { item in
+                    ForEach(store.liveSearchResults) { item in
                         Button {
-                            barcodeInput = item.barcode
                             store.selectAndRecordScan(item)
                         } label: {
-                            HStack(spacing: 5) {
+                            HStack(spacing: 8) {
                                 Text(item.emojiIcon)
-                                Text(item.name)
-                                    .font(.caption.weight(.semibold))
-                                    .lineLimit(1)
-                                Text("\(item.totalScore)")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1)
-                                    .background(Capsule().fill(item.scoreColor))
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(item.name).font(.caption.weight(.bold)).lineLimit(1)
+                                    Text(item.brand).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                .frame(maxWidth: 130, alignment: .leading)
+                                YarzarScoreRing(score: item.totalScore, size: 32, lineWidth: 3.5)
                             }
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 5)
-                            .background(Capsule().fill(Color(uiColor: .tertiarySystemGroupedBackground)))
+                            .padding(8)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color(uiColor: .secondarySystemGroupedBackground)))
                         }
                         .buttonStyle(.plain)
                     }
                 }
             }
         }
-        .padding(14)
-        .yarzarCard(accent: YarzarTheme.emerald)
+        .padding(12)
+        .yarzarCard(accent: YarzarTheme.mintTeal)
     }
 
     private var photoOCRPanel: some View {
@@ -240,7 +329,7 @@ struct MobileScannerTabView: View {
             Button {
                 let item = YarzarScoringEngine.analyzeCustomIngredients(
                     name: customName,
-                    brand: "Custom Scan",
+                    brand: "Live Label Scan",
                     domain: .food,
                     ingredientsText: customIngredients,
                     isOrganic: false
@@ -252,6 +341,7 @@ struct MobileScannerTabView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(YarzarTheme.emerald)
+            .disabled(customIngredients.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(14)
         .yarzarCard(accent: YarzarTheme.emerald)
@@ -273,12 +363,30 @@ struct MobileProductDetailCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                Text(product.emojiIcon)
-                    .font(.system(size: 38))
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(product.scoreColor.opacity(0.14))
+                        .frame(width: 64, height: 64)
+                    if let urlStr = product.imageURL, let url = URL(string: urlStr) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image.resizable().scaledToFill()
+                                    .frame(width: 64, height: 64)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                            default:
+                                Text(product.emojiIcon).font(.system(size: 32))
+                            }
+                        }
+                    } else {
+                        Text(product.emojiIcon)
+                            .font(.system(size: 32))
+                    }
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(product.name)
-                        .font(.headline)
+                        .font(.headline.weight(.bold))
                     Text("\(product.brand) · \(product.barcode)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -286,12 +394,19 @@ struct MobileProductDetailCard: View {
                         Text(L(product.ratingTitle))
                             .font(.caption.weight(.bold))
                             .foregroundStyle(product.scoreColor)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(product.scoreColor.opacity(0.14)))
-                        Button(L("Compare"), action: onCompare)
-                            .font(.caption2.weight(.semibold))
-                            .buttonStyle(.bordered)
+                        if let nutri = product.nutriScoreGrade {
+                            Text("Nutri-Score \(nutri)")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(YarzarTheme.clinicalCyan)
+                        }
+                        Button {
+                            store.toggleOrganicStatus(for: product)
+                        } label: {
+                            Text(L(product.isOrganic ? "Organic (+10 pts)" : "Set Organic"))
+                                .font(.caption2.weight(.bold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
                     }
                 }
                 Spacer()
@@ -301,31 +416,41 @@ struct MobileProductDetailCard: View {
             .yarzarCard(accent: product.scoreColor)
 
             if !violations.isEmpty {
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.shield.fill")
                         .foregroundStyle(YarzarTheme.crimsonPoor)
-                    Text("\(L("Dietary Alert Triggered")): \(violations.map { L($0.rawValue) }.joined(separator: ", "))")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(YarzarTheme.crimsonPoor)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L("Dietary Alert Triggered"))
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(YarzarTheme.crimsonPoor)
+                        Text(violations.map { L($0.rawValue) }.joined(separator: " · "))
+                            .font(.caption2)
+                    }
+                    Spacer()
                 }
                 .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 12).fill(YarzarTheme.crimsonPoor.opacity(0.12)))
             }
 
-            // 3 Pillars
-            HStack(spacing: 8) {
-                pillarBox(title: L("Nutritional Quality (60%)"), value: "\(product.breakdown.nutritionalQualityScore)/60", color: YarzarTheme.emerald)
-                pillarBox(title: L("Additive Safety (30%)"), value: "\(product.breakdown.additiveSafetyScore)", color: YarzarTheme.mintTeal)
-                pillarBox(title: L("Organic Dimension (10%)"), value: "\(product.breakdown.organicDimensionScore)/10", color: YarzarTheme.limeGood)
+            if product.domain != .cosmetic {
+                HStack(spacing: 8) {
+                    miniPillar(L("Nutritional Quality (60%)"), "\(product.breakdown.nutritionalQualityScore)/60", YarzarTheme.emerald)
+                    miniPillar(L("Additive Safety (30%)"), "\(product.breakdown.additiveSafetyScore)/30", YarzarTheme.mintTeal)
+                    miniPillar(L("Organic Dimension (10%)"), "\(product.breakdown.organicDimensionScore)/10", YarzarTheme.limeGood)
+                }
             }
 
             if let wf = product.wholeFoodProfile {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("🥑 \(L("Whole Food Advantage")) · GI: \(wf.glycemicIndex)")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(YarzarTheme.emerald)
-                    Text(wf.pesticideCategory)
+                    HStack {
+                        Label(L("Whole Food Advantage"), systemImage: "leaf.circle.fill")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(YarzarTheme.emerald)
+                        Spacer()
+                        Text("\(L("Glycemic Index")): \(wf.glycemicIndex)")
+                            .font(.caption.weight(.bold))
+                    }
+                    Text("🛡️ \(wf.pesticideCategory)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("🍳 \(wf.bestPreparationTip)")
@@ -336,60 +461,57 @@ struct MobileProductDetailCard: View {
                 .yarzarCard(accent: YarzarTheme.emerald)
             }
 
-            if !product.nutrients.isEmpty {
+            if !product.additives.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(L("Nutritional Quality (60%)"))
+                    Text(L("Nuanced Additive & Ingredient Analysis"))
                         .font(.subheadline.weight(.bold))
-                    ForEach(product.nutrients) { m in
-                        HStack {
-                            Text(L(m.name)).font(.caption.weight(.semibold))
-                            Spacer()
-                            Text(m.valueText).font(.caption.monospaced())
-                            Text(L(m.impact.rawValue))
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(m.impact.color)
-                        }
-                    }
-                }
-                .padding(14)
-                .yarzarCard(accent: YarzarTheme.emerald)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L("Nuanced Additive & Ingredient Analysis"))
-                    .font(.subheadline.weight(.bold))
-                if product.additives.isEmpty {
-                    Text(L("Zero Harmful Additives Detected"))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(YarzarTheme.emerald)
-                } else {
                     ForEach(product.additives) { add in
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: 5) {
                             HStack {
-                                Text("\(add.code) · \(add.name)")
+                                Text(add.code)
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(RoundedRectangle(cornerRadius: 5).fill(add.riskLevel.color))
+                                Text(add.name)
                                     .font(.caption.weight(.bold))
                                 Spacer()
-                                Text(L(add.concentrationTier.rawValue))
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(YarzarTheme.clinicalCyan)
                                 Text(L(add.riskLevel.rawValue))
                                     .font(.caption2.weight(.bold))
                                     .foregroundStyle(add.riskLevel.color)
+                            }
+                            HStack(spacing: 4) {
+                                ForEach(AdditiveConcentrationTier.allCases, id: \.self) { tier in
+                                    let sel = add.concentrationTier == tier
+                                    Button {
+                                        store.updateAdditiveConcentration(for: product, additiveCode: add.code, newTier: tier)
+                                    } label: {
+                                        Text(L(tier.shortTitle))
+                                            .font(.system(size: 10, weight: sel ? .bold : .medium))
+                                            .foregroundStyle(sel ? .white : YarzarTheme.clinicalCyan)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 2.5)
+                                            .background(Capsule().fill(sel ? YarzarTheme.clinicalCyan : YarzarTheme.clinicalCyan.opacity(0.14)))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                             Text(add.scientificSummary)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(.vertical, 4)
+                        .padding(8)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color(uiColor: .tertiarySystemGroupedBackground)))
                     }
                 }
+                .padding(14)
+                .yarzarCard(accent: YarzarTheme.mintTeal)
             }
-            .padding(14)
-            .yarzarCard(accent: YarzarTheme.mintTeal)
 
             if !alternatives.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(L("Healthier Alternatives"))
+                    Label(L("Healthier Alternatives"), systemImage: "sparkles")
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(YarzarTheme.emerald)
                     ForEach(alternatives) { alt in
@@ -398,16 +520,19 @@ struct MobileProductDetailCard: View {
                         } label: {
                             HStack {
                                 Text(alt.emojiIcon)
+                                    .font(.title3)
                                 VStack(alignment: .leading) {
-                                    Text(alt.name).font(.caption.weight(.bold)).foregroundStyle(.primary)
-                                    Text(alt.brand).font(.caption2).foregroundStyle(.secondary)
+                                    Text(alt.name)
+                                        .font(.caption.weight(.bold))
+                                    Text(alt.brand)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Text("+\(max(0, alt.totalScore - product.totalScore)) pts")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(YarzarTheme.emerald)
                                 YarzarScoreRing(score: alt.totalScore, size: 38, lineWidth: 4)
                             }
+                            .padding(8)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color(uiColor: .tertiarySystemGroupedBackground)))
                         }
                         .buttonStyle(.plain)
                     }
@@ -418,14 +543,14 @@ struct MobileProductDetailCard: View {
         }
     }
 
-    private func pillarBox(title: String, value: String, color: Color) -> some View {
+    private func miniPillar(_ title: String, _ val: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Text(value)
-                .font(.system(size: 15, weight: .heavy, design: .rounded))
+            Text(val)
+                .font(.subheadline.weight(.heavy))
                 .foregroundStyle(color)
         }
         .padding(10)
@@ -436,137 +561,195 @@ struct MobileProductDetailCard: View {
 
 struct MobileCatalogTabView: View {
     @ObservedObject var store: ProductStore
-    let filterDomain: ProductDomain?
+    var filterDomain: ProductDomain?
     var onSelect: (ProductItem) -> Void
-    @State private var searchText = ""
+    @State private var searchText: String = ""
 
     private var items: [ProductItem] {
         store.products.filter { item in
-            let domMatch = filterDomain == nil || item.domain == filterDomain
-            let searchMatch = searchText.isEmpty
+            let domMatch = (filterDomain == nil) || (item.domain == filterDomain)
+            let qMatch = searchText.isEmpty
                 || item.name.localizedCaseInsensitiveContains(searchText)
                 || item.brand.localizedCaseInsensitiveContains(searchText)
                 || item.barcode.localizedCaseInsensitiveContains(searchText)
-            return domMatch && searchMatch
+            return domMatch && qMatch
         }
     }
 
     var body: some View {
-        List(items) { item in
-            Button {
-                onSelect(item)
-            } label: {
-                HStack(spacing: 12) {
-                    Text(item.emojiIcon).font(.system(size: 28))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.name).font(.subheadline.weight(.bold)).foregroundStyle(.primary)
-                        Text("\(item.brand) · \(item.barcode)").font(.caption).foregroundStyle(.secondary)
+        List {
+            if filterDomain != .wholeFood && !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                Section {
+                    Button {
+                        Task { await store.searchOnlineCatalog(query: searchText, domain: filterDomain) }
+                    } label: {
+                        HStack {
+                            Image(systemName: "globe")
+                                .foregroundStyle(YarzarTheme.emerald)
+                            Text("\(L("Search Online")): \"\(searchText)\"")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            if store.isSearchingOnline {
+                                ProgressView()
+                            }
+                        }
                     }
-                    Spacer()
-                    YarzarScoreRing(score: item.totalScore, size: 44, lineWidth: 5)
                 }
             }
+            ForEach(items) { item in
+                Button {
+                    onSelect(item)
+                } label: {
+                    HStack(spacing: 12) {
+                        Text(item.emojiIcon)
+                            .font(.title2)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.name)
+                                .font(.subheadline.weight(.bold))
+                            Text("\(item.brand) · \(item.barcode)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        YarzarScoreRing(score: item.totalScore, size: 42, lineWidth: 4.5)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .searchable(text: $searchText, prompt: L("Search products, brands, barcodes, or ingredients…"))
         .navigationTitle(filterDomain == .wholeFood ? L("Whole Foods Studio") : L("Product Catalog"))
+        .searchable(text: $searchText, prompt: L("Search products, brands, barcodes, or ingredients…"))
+        .onSubmit(of: .search) {
+            if filterDomain != .wholeFood {
+                Task { await store.searchOnlineCatalog(query: searchText, domain: filterDomain) }
+            }
+        }
     }
 }
 
 struct MobileCompareAndAdditivesTabView: View {
     @ObservedObject var store: ProductStore
+    @State private var mode: Int = 0
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                if let a = store.compareProductA, let b = store.compareProductB {
-                    HStack(spacing: 10) {
-                        VStack {
-                            Text(a.emojiIcon).font(.largeTitle)
-                            Text(a.name).font(.caption.weight(.bold)).multilineTextAlignment(.center)
-                            YarzarScoreRing(score: a.totalScore, size: 54, lineWidth: 6)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(10)
-                        .yarzarCard(accent: a.scoreColor)
+        VStack {
+            Picker("", selection: $mode) {
+                Text(L("Compare")).tag(0)
+                Text(L("Additive & INCI Lab")).tag(1)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
 
-                        VStack {
-                            Text(b.emojiIcon).font(.largeTitle)
-                            Text(b.name).font(.caption.weight(.bold)).multilineTextAlignment(.center)
-                            YarzarScoreRing(score: b.totalScore, size: 54, lineWidth: 6)
+            if mode == 0 {
+                ScrollView {
+                    VStack(spacing: 14) {
+                        if let a = store.compareProductA, let b = store.compareProductB {
+                            HStack(spacing: 12) {
+                                compareBox(a, isWinner: a.totalScore >= b.totalScore)
+                                compareBox(b, isWinner: b.totalScore >= a.totalScore)
+                            }
+                            .padding(16)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(10)
-                        .yarzarCard(accent: b.scoreColor)
                     }
                 }
-
-                Text(L("Additive Intelligence"))
-                    .font(.headline)
-
-                ForEach(YarzarScoringEngine.additiveReferenceLibrary) { add in
+            } else {
+                List(YarzarScoringEngine.additiveReferenceLibrary) { add in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("\(add.code) · \(add.name)").font(.subheadline.weight(.bold))
+                            Text(add.code)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 5).fill(add.riskLevel.color))
+                            Text(add.name)
+                                .font(.subheadline.weight(.bold))
                             Spacer()
-                            Text(L(add.riskLevel.rawValue))
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(add.riskLevel.color)
+                            Text(L(add.concentrationTier.rawValue))
+                                .font(.caption2)
+                                .foregroundStyle(YarzarTheme.clinicalCyan)
                         }
-                        Text(add.scientificSummary).font(.caption).foregroundStyle(.secondary)
+                        Text(add.scientificSummary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(12)
-                    .yarzarCard(accent: add.riskLevel.color)
                 }
             }
-            .padding(16)
         }
-        .navigationTitle(L("Additive Intelligence"))
+        .navigationTitle(mode == 0 ? L("Side-by-Side Comparison") : L("Additive & INCI Lab"))
+    }
+
+    private func compareBox(_ item: ProductItem, isWinner: Bool) -> some View {
+        VStack(spacing: 8) {
+            if isWinner {
+                Text("🏆 \(L("Winner"))")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(YarzarTheme.emerald)
+            }
+            Text(item.emojiIcon)
+                .font(.largeTitle)
+            Text(item.name)
+                .font(.caption.weight(.bold))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+            YarzarScoreRing(score: item.totalScore, size: 64, lineWidth: 6)
+            Text(L(item.ratingTitle))
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(item.scoreColor)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .yarzarCard(accent: isWinner ? YarzarTheme.emerald : Color.secondary.opacity(0.25))
     }
 }
 
 struct MobileSettingsAndAboutTabView: View {
     @ObservedObject var store: ProductStore
     @ObservedObject var updateChecker: UpdateChecker
+    @ObservedObject private var lang = LanguageManager.shared
+    @ObservedObject private var theme = ThemeManager.shared
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(L("Dietary Guardian"))
-                    .font(.headline)
-
-                ForEach(DietaryRestriction.allCases) { r in
-                    let isOn = store.activeRestrictions.contains(r)
-                    Button {
-                        store.toggleRestriction(r)
-                    } label: {
-                        HStack {
-                            Image(systemName: r.icon).foregroundStyle(isOn ? YarzarTheme.emerald : .secondary)
-                            Text(L(r.rawValue)).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                            Spacer()
-                            Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(isOn ? YarzarTheme.emerald : .secondary)
-                        }
-                        .padding(12)
-                        .yarzarCard(accent: isOn ? YarzarTheme.emerald : .secondary)
-                    }
-                    .buttonStyle(.plain)
+        List {
+            Section(L("Dietary & Allergen Guardian")) {
+                ForEach(DietaryRestriction.allCases) { rest in
+                    Toggle(
+                        L(rest.rawValue),
+                        isOn: Binding(
+                            get: { store.activeRestrictions.contains(rest) },
+                            set: { _ in store.toggleRestriction(rest) }
+                        )
+                    )
                 }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(L("Open Source | Free to Fork & Use"))
-                        .font(.headline)
-                    Text("\(L("Developed by:")) SoftAI Yazılım")
-                        .font(.subheadline)
-                    Text("\(L("Developer:")) \(L("Assoc. Prof. Dr. Mehmet Akif Cifci"))")
-                        .font(.subheadline)
-                    Link("@themanoftalent — GitHub", destination: URL(string: "https://github.com/themanoftalent/yarzar-ios")!)
-                        .font(.subheadline.weight(.bold))
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .yarzarCard(accent: YarzarTheme.emerald)
             }
-            .padding(16)
+
+            Section(L("HELP")) {
+                Link(destination: URL(string: "https://github.com/themanoftalent/Yarzar#readme")!) {
+                    HStack {
+                        Label(L("User Guide"), systemImage: "book.closed.fill")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(L("ABOUT YARZAR"))
+                        .font(.caption.weight(.heavy))
+                        .foregroundStyle(YarzarTheme.crimsonPoor)
+                    Text("Yarzar (Yarar & Zarar) v\(AppVersion.current)")
+                        .font(.subheadline.weight(.bold))
+                    Text("\(L("Developer:")) \(L("Assoc. Prof. Dr. Mehmet Akif Cifci"))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button(updateChecker.isChecking ? L("Checking…") : L("Check for Updates…")) {
+                        updateChecker.checkNow()
+                    }
+                    .font(.caption.weight(.bold))
+                }
+                .padding(.vertical, 4)
+            }
         }
         .navigationTitle(L("About Yarzar"))
     }

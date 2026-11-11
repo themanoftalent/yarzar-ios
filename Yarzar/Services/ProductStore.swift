@@ -5,31 +5,63 @@ import SwiftUI
 @MainActor
 final class ProductStore: ObservableObject {
     @Published var products: [ProductItem] = []
+    @Published var liveSearchResults: [ProductItem] = []
+    @Published var liveAlternatives: [String: [ProductItem]] = [:]
     @Published var selectedProduct: ProductItem?
     @Published var compareProductA: ProductItem?
     @Published var compareProductB: ProductItem?
     @Published var activeRestrictions: Set<DietaryRestriction> = [.palmOilFree, .endocrineDisruptorFree]
     @Published var isLookingUpBarcode = false
+    @Published var isSearchingOnline = false
     @Published var lookupStatusMessage: String?
 
     private let favoritesKey = "yarzarFavoriteProductIds"
     private let restrictionsKey = "yarzarDietaryRestrictions"
 
+    private static var databaseFileURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent("Yarzar", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("yarzar_products_v2.json")
+    }
+
     init() {
-        let initial = Self.seedCatalog
         let savedFavs = Set(UserDefaults.standard.stringArray(forKey: favoritesKey) ?? [])
         if let savedRest = UserDefaults.standard.stringArray(forKey: restrictionsKey) {
             activeRestrictions = Set(savedRest.compactMap(DietaryRestriction.init(rawValue:)))
         }
 
-        products = initial.map { item in
+        var merged = Self.seedCatalog
+        if let data = try? Data(contentsOf: Self.databaseFileURL),
+           let persisted = try? JSONDecoder().decode([ProductItem].self, from: data) {
+            for item in persisted {
+                if let idx = merged.firstIndex(where: { $0.id == item.id || $0.barcode == item.barcode }) {
+                    merged[idx] = item
+                } else {
+                    merged.insert(item, at: 0)
+                }
+            }
+        }
+
+        products = merged.map { item in
             var copy = item
-            copy.isFavorite = savedFavs.contains(item.id)
+            if savedFavs.contains(item.id) {
+                copy.isFavorite = true
+            }
             return copy
         }
-        selectedProduct = products.first
+
+        selectedProduct = scannedHistory.first ?? products.first
         compareProductA = products.first(where: { $0.id == "food-hazelnut-cocoa-spread" })
         compareProductB = products.first(where: { $0.id == "food-organic-hazelnut" })
+    }
+
+    private func persistToDisk() {
+        let toSave = products.filter { $0.lastScannedAt != nil || $0.isFavorite || $0.id.hasPrefix("off-") || $0.id.hasPrefix("custom-") }
+        if let data = try? JSONEncoder().encode(toSave) {
+            try? data.write(to: Self.databaseFileURL, options: .atomic)
+        }
     }
 
     var scannedHistory: [ProductItem] {
@@ -50,13 +82,56 @@ final class ProductStore: ObservableObject {
     }
 
     func toggleFavorite(_ product: ProductItem) {
-        guard let idx = products.firstIndex(where: { $0.id == product.id }) else { return }
-        products[idx].isFavorite.toggle()
-        if selectedProduct?.id == product.id {
-            selectedProduct = products[idx]
+        if let idx = products.firstIndex(where: { $0.id == product.id }) {
+            products[idx].isFavorite.toggle()
+            if selectedProduct?.id == product.id {
+                selectedProduct = products[idx]
+            }
+        } else {
+            var copy = product
+            copy.isFavorite.toggle()
+            products.insert(copy, at: 0)
+            if selectedProduct?.id == product.id {
+                selectedProduct = copy
+            }
         }
         let favIds = products.filter(\.isFavorite).map(\.id)
         UserDefaults.standard.set(favIds, forKey: favoritesKey)
+        persistToDisk()
+    }
+
+    func updateAdditiveConcentration(for product: ProductItem, additiveCode: String, newTier: AdditiveConcentrationTier) {
+        guard let pIdx = products.firstIndex(where: { $0.id == product.id }) else { return }
+        guard let aIdx = products[pIdx].additives.firstIndex(where: { $0.code == additiveCode }) else { return }
+        products[pIdx].additives[aIdx].concentrationTier = newTier
+        products[pIdx] = YarzarScoringEngine.recalculateProduct(products[pIdx])
+        if selectedProduct?.id == product.id {
+            selectedProduct = products[pIdx]
+        }
+        if compareProductA?.id == product.id {
+            compareProductA = products[pIdx]
+        }
+        if compareProductB?.id == product.id {
+            compareProductB = products[pIdx]
+        }
+        persistToDisk()
+    }
+
+    func toggleOrganicStatus(for product: ProductItem) {
+        guard let pIdx = products.firstIndex(where: { $0.id == product.id }) else { return }
+        products[pIdx].isOrganic.toggle()
+        products[pIdx] = YarzarScoringEngine.recalculateProduct(products[pIdx])
+        if selectedProduct?.id == product.id {
+            selectedProduct = products[pIdx]
+        }
+        persistToDisk()
+    }
+
+    func clearScanHistory() {
+        for idx in products.indices {
+            products[idx].lastScannedAt = nil
+        }
+        persistToDisk()
     }
 
     func toggleRestriction(_ restriction: DietaryRestriction) {
@@ -104,6 +179,9 @@ final class ProductStore: ObservableObject {
     }
 
     func healthierAlternatives(for product: ProductItem) -> [ProductItem] {
+        if let live = liveAlternatives[product.barcode], !live.isEmpty {
+            return live
+        }
         let explicit = product.healthierAlternativeIds.compactMap { altId in
             products.first(where: { $0.id == altId })
         }
@@ -118,7 +196,7 @@ final class ProductStore: ObservableObject {
     }
 
     func selectAndRecordScan(_ product: ProductItem) {
-        if let idx = products.firstIndex(where: { $0.id == product.id }) {
+        if let idx = products.firstIndex(where: { $0.id == product.id || $0.barcode == product.barcode }) {
             products[idx].lastScannedAt = Date()
             selectedProduct = products[idx]
         } else {
@@ -127,38 +205,81 @@ final class ProductStore: ObservableObject {
             products.insert(copy, at: 0)
             selectedProduct = copy
         }
+        persistToDisk()
+
+        if product.categoryTag != nil && liveAlternatives[product.barcode] == nil {
+            Task {
+                let alts = await OpenFactsService.fetchHealthierAlternatives(for: product)
+                if !alts.isEmpty {
+                    self.liveAlternatives[product.barcode] = alts
+                }
+            }
+        }
     }
 
-    func lookupBarcode(_ rawBarcode: String) async {
-        let cleaned = rawBarcode.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Unified real-time lookup: if input is a barcode (digits), queries OpenFacts barcode endpoint;
+    /// otherwise searches 3M+ real products by name/brand across OpenFoodFacts & OpenBeautyFacts.
+    func lookupBarcode(_ rawInput: String) async {
+        let cleaned = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
         lookupStatusMessage = nil
 
-        if let local = products.first(where: { $0.barcode == cleaned }) {
-            selectAndRecordScan(local)
-            lookupStatusMessage = "\(L("Matched in local database:")) \(local.name)"
-            return
-        }
+        let digitsOnly = cleaned.filter(\.isNumber)
+        let isBarcodeQuery = digitsOnly.count >= 6 && digitsOnly.count == cleaned.replacingOccurrences(of: "-", with: "").replacingOccurrences(of: " ", with: "").count
 
         isLookingUpBarcode = true
         defer { isLookingUpBarcode = false }
 
-        if let online = await OpenFactsService.fetchProduct(barcode: cleaned) {
-            selectAndRecordScan(online)
-            lookupStatusMessage = "\(L("Fetched live from OpenFacts:")) \(online.name)"
+        if isBarcodeQuery {
+            if let online = await OpenFactsService.fetchProduct(barcode: digitsOnly) {
+                selectAndRecordScan(online)
+                lookupStatusMessage = "\(L("Fetched live from OpenFacts:")) \(online.name) (\(online.brand))"
+                return
+            }
+            if let local = products.first(where: { $0.barcode == digitsOnly }) {
+                selectAndRecordScan(local)
+                lookupStatusMessage = "\(L("Matched in local database:")) \(local.name)"
+                return
+            }
+            lookupStatusMessage = L("No barcode match found. Try our Ingredient OCR / Text Analyzer below!")
+        } else {
+            await searchOnlineCatalog(query: cleaned, domain: nil)
+        }
+    }
+
+    func searchOnlineCatalog(query: String, domain: ProductDomain?) async {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            liveSearchResults = []
+            return
+        }
+
+        isSearchingOnline = true
+        defer { isSearchingOnline = false }
+
+        let found = await OpenFactsService.searchProducts(query: trimmed, domain: domain)
+        liveSearchResults = found
+        if let first = found.first {
+            for item in found.reversed() {
+                if !products.contains(where: { $0.barcode == item.barcode }) {
+                    products.insert(item, at: 0)
+                }
+            }
+            selectAndRecordScan(first)
+            lookupStatusMessage = "\(L("Fetched live from OpenFacts:")) \(found.count) results for \"\(trimmed)\""
         } else {
             lookupStatusMessage = L("No barcode match found. Try our Ingredient OCR / Text Analyzer below!")
         }
     }
 
-    // MARK: - Curated Scientific Catalog (Food, Cosmetics & Whole Foods)
+    // MARK: - Reference Catalog (Food, Cosmetics & USDA/EWG Whole Foods)
     static let seedCatalog: [ProductItem] = [
         // 1. Classic Hazelnut Cocoa Spread (Poor - 18/100)
         ProductItem(
             id: "food-hazelnut-cocoa-spread",
             barcode: "3017620422003",
-            name: "Hazelnut & Cocoa Sweet Spread",
-            brand: "Ferrero Nutella",
+            name: "Nutella Hazelnut & Cocoa Spread",
+            brand: "Ferrero",
             category: "Sweet Spreads & Breakfast",
             domain: .food,
             emojiIcon: "🍫",
@@ -175,7 +296,7 @@ final class ProductStore: ObservableObject {
             additives: [
                 AdditiveItem(
                     code: "E322",
-                    name: "Soy Lecithin",
+                    name: "Lecithins (Soy)",
                     functionCategory: "Natural Emulsifier",
                     riskLevel: .riskFree,
                     concentrationTier: .trace,
@@ -193,15 +314,19 @@ final class ProductStore: ObservableObject {
             wholeFoodProfile: nil,
             healthierAlternativeIds: ["food-organic-hazelnut", "food-pure-almond-butter"],
             isFavorite: false,
-            lastScannedAt: Date().addingTimeInterval(-3600)
+            lastScannedAt: nil,
+            nutriScoreGrade: "E",
+            novaGroup: 4,
+            servingSize: "400 g",
+            categoryTag: "en:hazelnut-spreads"
         ),
 
         // 2. Organic 45% Hazelnut Dark Spread (Excellent - 86/100)
         ProductItem(
             id: "food-organic-hazelnut",
             barcode: "8009004800151",
-            name: "Organic 45% Roasted Hazelnut & Cacao Spread",
-            brand: "Rigoni di Asiago Nocciolata Bio",
+            name: "Nocciolata Bio Organic Hazelnut & Cacao Spread",
+            brand: "Rigoni di Asiago",
             category: "Sweet Spreads & Breakfast",
             domain: .food,
             emojiIcon: "🌰",
@@ -222,15 +347,19 @@ final class ProductStore: ObservableObject {
             isVegan: true,
             wholeFoodProfile: nil,
             healthierAlternativeIds: ["food-pure-almond-butter"],
-            isFavorite: true,
-            lastScannedAt: Date().addingTimeInterval(-3200)
+            isFavorite: false,
+            lastScannedAt: nil,
+            nutriScoreGrade: "B",
+            novaGroup: 3,
+            servingSize: "270 g",
+            categoryTag: "en:hazelnut-spreads"
         ),
 
         // 3. Stone-Ground 100% Pure Almond Butter (Excellent - 96/100)
         ProductItem(
             id: "food-pure-almond-butter",
             barcode: "5060132281001",
-            name: "100% Stone-Ground Organic Almond Butter",
+            name: "100% Organic Roasted Almond Butter",
             brand: "Meridian Organic",
             category: "Sweet Spreads & Breakfast",
             domain: .food,
@@ -252,16 +381,20 @@ final class ProductStore: ObservableObject {
             isVegan: true,
             wholeFoodProfile: nil,
             healthierAlternativeIds: [],
-            isFavorite: true,
-            lastScannedAt: Date().addingTimeInterval(-2800)
+            isFavorite: false,
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1,
+            servingSize: "170 g",
+            categoryTag: "en:nut-butters"
         ),
 
         // 4. Classic Caramel Cola Soda (Poor - 6/100)
         ProductItem(
             id: "food-classic-cola",
             barcode: "5449000000996",
-            name: "Classic Carbonated Caramel Soft Drink",
-            brand: "Coca-Cola Original",
+            name: "Coca-Cola Original Taste",
+            brand: "Coca-Cola",
             category: "Beverages & Refreshments",
             domain: .food,
             emojiIcon: "🥤",
@@ -274,7 +407,7 @@ final class ProductStore: ObservableObject {
             ],
             additives: [
                 AdditiveItem(
-                    code: "E150d",
+                    code: "E150D",
                     name: "Sulfite Ammonia Caramel",
                     functionCategory: "Caramel Coloring (Class IV)",
                     riskLevel: .moderateRisk,
@@ -304,7 +437,11 @@ final class ProductStore: ObservableObject {
             wholeFoodProfile: nil,
             healthierAlternativeIds: ["food-kombucha-ginger", "food-sparkling-water"],
             isFavorite: false,
-            lastScannedAt: Date().addingTimeInterval(-2200)
+            lastScannedAt: nil,
+            nutriScoreGrade: "E",
+            novaGroup: 4,
+            servingSize: "330 ml",
+            categoryTag: "en:sodas"
         ),
 
         // 5. Organic Raw Ginger & Lemon Kombucha (Excellent - 88/100)
@@ -312,7 +449,7 @@ final class ProductStore: ObservableObject {
             id: "food-kombucha-ginger",
             barcode: "5060448250012",
             name: "Organic Live Fermented Ginger & Lemon Kombucha",
-            brand: "Remedy / BioLive",
+            brand: "Remedy BioLive",
             category: "Beverages & Refreshments",
             domain: .food,
             emojiIcon: "🍵",
@@ -331,7 +468,10 @@ final class ProductStore: ObservableObject {
             wholeFoodProfile: nil,
             healthierAlternativeIds: ["food-sparkling-water"],
             isFavorite: false,
-            lastScannedAt: nil
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 2,
+            servingSize: "330 ml"
         ),
 
         // 6. Natural Mineral Sparkling Water (Excellent - 100/100)
@@ -358,10 +498,13 @@ final class ProductStore: ObservableObject {
             wholeFoodProfile: nil,
             healthierAlternativeIds: [],
             isFavorite: false,
-            lastScannedAt: nil
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1,
+            servingSize: "500 ml"
         ),
 
-        // 7. Cured Nitrite Deli Salami / Pepperoni (Poor - 8/100)
+        // 7. Cured Nitrite Deli Salami (Poor - 8/100)
         ProductItem(
             id: "food-cured-salami",
             barcode: "8690526014228",
@@ -378,8 +521,8 @@ final class ProductStore: ObservableObject {
                 NutrientMetric(name: "Protein", valueText: "19.5 g / 100g", numericValue: 19.5, maxScaleValue: 25, impact: .optimal, detailNote: "High protein content", icon: "bolt.heart.fill")
             ],
             additives: [
-                YarzarScoringEngine.additiveReferenceLibrary[0], // E250 Sodium Nitrite
-                YarzarScoringEngine.additiveReferenceLibrary[5]  // E621 MSG
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "E250" })!,
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "E621" })!
             ],
             ingredientsText: "Beef & Poultry Meat, Beef Fat, Salt, Dextrose, Spices, Flavour Enhancer (Monosodium Glutamate E621), Antioxidant (E301), Preservative (Sodium Nitrite E250).",
             containsGluten: false,
@@ -389,7 +532,9 @@ final class ProductStore: ObservableObject {
             wholeFoodProfile: nil,
             healthierAlternativeIds: ["whole-wild-salmon", "food-greek-yogurt"],
             isFavorite: false,
-            lastScannedAt: nil
+            lastScannedAt: nil,
+            nutriScoreGrade: "E",
+            novaGroup: 4
         ),
 
         // 8. Traditional Strained Greek / Süzme Yogurt (Excellent - 90/100)
@@ -416,8 +561,10 @@ final class ProductStore: ObservableObject {
             isVegan: false,
             wholeFoodProfile: nil,
             healthierAlternativeIds: [],
-            isFavorite: true,
-            lastScannedAt: nil
+            isFavorite: false,
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1
         ),
 
         // 9. Sprouted Whole Oat & Seed Muesli (Excellent - 92/100)
@@ -425,7 +572,7 @@ final class ProductStore: ObservableObject {
             id: "food-oat-muesli",
             barcode: "4008400404127",
             name: "Organic Wholegrain Oat, Chia & Pumpkin Seed Muesli",
-            brand: "Kölln / Doğalsan Bio",
+            brand: "Kölln Bio",
             category: "Sweet Spreads & Breakfast",
             domain: .food,
             emojiIcon: "🌾",
@@ -445,7 +592,9 @@ final class ProductStore: ObservableObject {
             wholeFoodProfile: nil,
             healthierAlternativeIds: [],
             isFavorite: false,
-            lastScannedAt: nil
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1
         ),
 
         // MARK: - COSMETIC & BEAUTY PRODUCTS
@@ -462,10 +611,10 @@ final class ProductStore: ObservableObject {
             breakdown: ScoreBreakdown(nutritionalQualityScore: 0, additiveSafetyScore: 19, organicDimensionScore: 0, totalScore: 19),
             nutrients: [],
             additives: [
-                YarzarScoringEngine.additiveReferenceLibrary[11], // Propylparaben (High Risk Endocrine)
-                YarzarScoringEngine.additiveReferenceLibrary[12], // BHT (High Risk Endocrine)
-                YarzarScoringEngine.additiveReferenceLibrary[14], // Phenoxyethanol
-                YarzarScoringEngine.additiveReferenceLibrary[15]  // Linalool / Limonene
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-PARABEN" })!,
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-BHT" })!,
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-PHENOXY" })!,
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-LINALOOL" })!
             ],
             ingredientsText: "Aqua, Paraffinum Liquidum, Glycerin, Cetearyl Alcohol, Dimethicone, Phenoxyethanol, Propylparaben, BHT, Parfum, Linalool, Limonene, Citronellol.",
             containsGluten: false,
@@ -475,7 +624,7 @@ final class ProductStore: ObservableObject {
             wholeFoodProfile: nil,
             healthierAlternativeIds: ["cos-cerave-cream", "cos-la-roche-fluid"],
             isFavorite: false,
-            lastScannedAt: Date().addingTimeInterval(-1800)
+            lastScannedAt: nil
         ),
 
         // 11. Ceramide & Niacinamide Barrier Moisturizing Cream (Excellent - 93/100)
@@ -491,8 +640,9 @@ final class ProductStore: ObservableObject {
             breakdown: ScoreBreakdown(nutritionalQualityScore: 0, additiveSafetyScore: 93, organicDimensionScore: 0, totalScore: 93),
             nutrients: [],
             additives: [
-                YarzarScoringEngine.additiveReferenceLibrary[16], // Niacinamide (Risk-Free)
-                YarzarScoringEngine.additiveReferenceLibrary[17]  // Panthenol (Risk-Free)
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-NIACINAMIDE" })!,
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-PANTHENOL" })!,
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-CERAMIDE" })!
             ],
             ingredientsText: "Aqua, Glycerin, Shea Butter (Butyrospermum Parkii), Niacinamide, Panthenol, Ceramide NP, Ceramide AP, Ceramide EOP, Sodium Hyaluronate, Tocopherol, Caprylyl Glycol.",
             containsGluten: false,
@@ -501,8 +651,8 @@ final class ProductStore: ObservableObject {
             isVegan: true,
             wholeFoodProfile: nil,
             healthierAlternativeIds: ["cos-la-roche-fluid"],
-            isFavorite: true,
-            lastScannedAt: Date().addingTimeInterval(-1200)
+            isFavorite: false,
+            lastScannedAt: nil
         ),
 
         // 12. Ultra-Sensitive Squalane & Thermal Dermocosmetic Fluid (Excellent - 100/100)
@@ -518,7 +668,8 @@ final class ProductStore: ObservableObject {
             breakdown: ScoreBreakdown(nutritionalQualityScore: 0, additiveSafetyScore: 100, organicDimensionScore: 10, totalScore: 100),
             nutrients: [],
             additives: [
-                YarzarScoringEngine.additiveReferenceLibrary[17] // Panthenol
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-SQUALANE" })!,
+                YarzarScoringEngine.additiveReferenceLibrary.first(where: { $0.code == "INCI-PANTHENOL" })!
             ],
             ingredientsText: "Aqua (Thermal Spring Water), Glycerin, Squalane, Butyrospermum Parkii Butter, Pentylene Glycol, Panthenol, Sphingobioma, Zero Fragrance, Zero Parabens, Zero Preservatives.",
             containsGluten: false,
@@ -531,13 +682,13 @@ final class ProductStore: ObservableObject {
             lastScannedAt: nil
         ),
 
-        // MARK: - WHOLE FOODS & RAW PRODUCE (Overcoming Yuka's Barcode Limitation!)
+        // MARK: - WHOLE FOODS & RAW PRODUCE (USDA Nutrient Reference + EWG Pesticide Index)
         // 13. Organic Hass Avocado (Whole Food - 98/100)
         ProductItem(
             id: "whole-organic-avocado",
             barcode: "PLU-4225",
             name: "Fresh Hass Avocado (Whole Raw Produce)",
-            brand: "Whole Foods · Clean Fifteen #1",
+            brand: "USDA Whole Foods · Clean Fifteen #1",
             category: "Fresh Produce & Whole Foods",
             domain: .wholeFood,
             emojiIcon: "🥑",
@@ -562,8 +713,10 @@ final class ProductStore: ObservableObject {
                 bestPreparationTip: "Consume raw with tomatoes or leafy greens; healthy monounsaturated fats increase carotenoid absorption by up to 4.5x."
             ),
             healthierAlternativeIds: [],
-            isFavorite: true,
-            lastScannedAt: Date().addingTimeInterval(-600)
+            isFavorite: false,
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1
         ),
 
         // 14. Wild-Caught Alaskan / Black Sea Salmon (Whole Food - 95/100)
@@ -571,7 +724,7 @@ final class ProductStore: ObservableObject {
             id: "whole-wild-salmon",
             barcode: "PLU-SALMON",
             name: "Wild-Caught Salmon Fillet (Raw Whole Protein)",
-            brand: "Whole Foods · Marine Omega-3",
+            brand: "USDA Whole Foods · Marine Omega-3",
             category: "Fresh Produce & Whole Foods",
             domain: .wholeFood,
             emojiIcon: "🐟",
@@ -597,7 +750,9 @@ final class ProductStore: ObservableObject {
             ),
             healthierAlternativeIds: [],
             isFavorite: false,
-            lastScannedAt: nil
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1
         ),
 
         // 15. Conventional Non-Organic Strawberries (Whole Food - 68/100 due to pesticide residue!)
@@ -605,7 +760,7 @@ final class ProductStore: ObservableObject {
             id: "whole-conventional-strawberries",
             barcode: "PLU-4323",
             name: "Conventional Strawberries (Unwashed Non-Organic)",
-            brand: "Whole Foods · Dirty Dozen Watchlist",
+            brand: "USDA Whole Foods · Dirty Dozen Watchlist",
             category: "Fresh Produce & Whole Foods",
             domain: .wholeFood,
             emojiIcon: "🍓",
@@ -642,7 +797,9 @@ final class ProductStore: ObservableObject {
             ),
             healthierAlternativeIds: ["whole-organic-avocado", "whole-wild-blueberries"],
             isFavorite: false,
-            lastScannedAt: nil
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1
         ),
 
         // 16. Organic Wild Blueberries (Whole Food - 99/100)
@@ -650,7 +807,7 @@ final class ProductStore: ObservableObject {
             id: "whole-wild-blueberries",
             barcode: "PLU-94240",
             name: "Organic Wild Forest Blueberries (Bilberries)",
-            brand: "Whole Foods · Certified Organic",
+            brand: "USDA Whole Foods · Certified Organic",
             category: "Fresh Produce & Whole Foods",
             domain: .wholeFood,
             emojiIcon: "🫐",
@@ -674,8 +831,116 @@ final class ProductStore: ObservableObject {
                 bestPreparationTip: "Eat raw or flash-frozen; avoid pairing with high-casein dairy if maximizing acute polyphenol antioxidant absorption."
             ),
             healthierAlternativeIds: [],
-            isFavorite: true,
-            lastScannedAt: nil
+            isFavorite: false,
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1
+        ),
+
+        // 17. Raw Organic Broccoli Florets (Whole Food - 99/100)
+        ProductItem(
+            id: "whole-organic-broccoli",
+            barcode: "PLU-94060",
+            name: "Organic Broccoli Florets (Cruciferous Whole Vegetable)",
+            brand: "USDA Whole Foods · Clean Fifteen",
+            category: "Fresh Produce & Whole Foods",
+            domain: .wholeFood,
+            emojiIcon: "🥦",
+            isOrganic: true,
+            breakdown: ScoreBreakdown(nutritionalQualityScore: 59, additiveSafetyScore: 30, organicDimensionScore: 10, totalScore: 99),
+            nutrients: [
+                NutrientMetric(name: "Calories", valueText: "34 kcal / 100g", numericValue: 34, maxScaleValue: 650, impact: .optimal, detailNote: "Ultra-nutrient-dense cruciferous vegetable", icon: "flame.fill"),
+                NutrientMetric(name: "Dietary Fiber", valueText: "2.6 g / 100g", numericValue: 2.6, maxScaleValue: 12, impact: .optimal, detailNote: "Prebiotic glucosinolate fiber", icon: "leaf.fill"),
+                NutrientMetric(name: "Protein", valueText: "2.8 g / 100g", numericValue: 2.8, maxScaleValue: 25, impact: .optimal, detailNote: "High protein-to-calorie ratio for vegetables", icon: "bolt.heart.fill")
+            ],
+            additives: [],
+            ingredientsText: "100% Fresh Broccoli (Brassica oleracea var. italica). Rich in Sulforaphane precursors (Glucoraphanin + Myrosinase), Vitamin C (89.2mg/100g), and Vitamin K1 (102µg).",
+            containsGluten: false,
+            containsLactose: false,
+            containsPalmOil: false,
+            isVegan: true,
+            wholeFoodProfile: WholeFoodProfile(
+                glycemicIndex: 10,
+                pesticideCategory: "Clean Fifteen — Low pesticide residue index",
+                seasonality: "Autumn, Winter & Spring",
+                keyMicronutrients: ["Sulforaphane", "Vitamin C (89mg — 99% DV)", "Vitamin K1 (102µg)", "Folate (63µg)", "Chromium"],
+                bestPreparationTip: "Chop and let rest 10 minutes before light steaming (3–4 min max) to activate myrosinase and maximize sulforaphane formation."
+            ),
+            healthierAlternativeIds: [],
+            isFavorite: false,
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1
+        ),
+
+        // 18. Pasture-Raised Organic Eggs (Whole Food - 96/100)
+        ProductItem(
+            id: "whole-pasture-eggs",
+            barcode: "PLU-EGG-ORG",
+            name: "Pasture-Raised Organic Whole Eggs",
+            brand: "USDA Whole Foods · Complete Bioavailable Protein",
+            category: "Fresh Produce & Whole Foods",
+            domain: .wholeFood,
+            emojiIcon: "🥚",
+            isOrganic: true,
+            breakdown: ScoreBreakdown(nutritionalQualityScore: 56, additiveSafetyScore: 30, organicDimensionScore: 10, totalScore: 96),
+            nutrients: [
+                NutrientMetric(name: "Protein", valueText: "12.6 g / 100g", numericValue: 12.6, maxScaleValue: 25, impact: .optimal, detailNote: "100% biological value reference protein", icon: "bolt.heart.fill"),
+                NutrientMetric(name: "Sugar", valueText: "0.4 g / 100g", numericValue: 0.4, maxScaleValue: 50, impact: .optimal, detailNote: "Zero glycemic load (GI: 0)", icon: "cube.fill")
+            ],
+            additives: [],
+            ingredientsText: "100% Pasture-Raised Organic Hen Eggs. Highest natural source of Choline (294mg/100g), Lutein, Zeaxanthin, Vitamin B12, Vitamin D3, and Selenium.",
+            containsGluten: false,
+            containsLactose: false,
+            containsPalmOil: false,
+            isVegan: false,
+            wholeFoodProfile: WholeFoodProfile(
+                glycemicIndex: 0,
+                pesticideCategory: "Certified Organic Pasture-Raised — 2x more Omega-3 and 3x more Vitamin E than caged eggs",
+                seasonality: "Year-Round",
+                keyMicronutrients: ["Choline (294mg)", "Lutein & Zeaxanthin", "Vitamin B12", "Selenium (30.7µg)", "Biotin (B7)"],
+                bestPreparationTip: "Poach or soft-boil (runny yolk) to prevent cholesterol and lutein oxidation from high-heat frying."
+            ),
+            healthierAlternativeIds: [],
+            isFavorite: false,
+            lastScannedAt: nil,
+            nutriScoreGrade: "A",
+            novaGroup: 1
+        ),
+
+        // 19. Cold-Pressed Extra Virgin Olive Oil (Whole Food - 94/100)
+        ProductItem(
+            id: "whole-extra-virgin-olive-oil",
+            barcode: "8690637001024",
+            name: "Early Harvest Cold-Pressed Extra Virgin Olive Oil",
+            brand: "Aegean Organic · High Polyphenol EVOO",
+            category: "Fresh Produce & Whole Foods",
+            domain: .wholeFood,
+            emojiIcon: "🫒",
+            isOrganic: true,
+            breakdown: ScoreBreakdown(nutritionalQualityScore: 54, additiveSafetyScore: 30, organicDimensionScore: 10, totalScore: 94),
+            nutrients: [
+                NutrientMetric(name: "Fruits, Veg & Nuts", valueText: "100% Olive Fruit", numericValue: 100, maxScaleValue: 100, impact: .optimal, detailNote: "73% monounsaturated oleic acid + oleocanthal polyphenols", icon: "leaf.circle.fill"),
+                NutrientMetric(name: "Sugar", valueText: "0.0 g / 100ml", numericValue: 0, maxScaleValue: 50, impact: .optimal, detailNote: "Zero carbohydrates", icon: "cube.fill")
+            ],
+            additives: [],
+            ingredientsText: "100% Unfiltered Early Harvest Cold-Pressed Extra Virgin Olive Oil (Olea europaea). Rich in Oleocanthal, Oleacein, Hydroxytyrosol (>450 mg/kg polyphenols), and Vitamin E.",
+            containsGluten: false,
+            containsLactose: false,
+            containsPalmOil: false,
+            isVegan: true,
+            wholeFoodProfile: WholeFoodProfile(
+                glycemicIndex: 0,
+                pesticideCategory: "Certified Organic Single-Estate — Cold-extracted below 27°C without chemical refining solvents",
+                seasonality: "October–November Early Harvest",
+                keyMicronutrients: ["Oleocanthal (Anti-inflammatory)", "Hydroxytyrosol", "Oleic Acid (73%)", "Vitamin E (14.4mg)", "Squalene"],
+                bestPreparationTip: "Store in dark glass away from heat; drizzle raw over salads and cooked vegetables to preserve polyphenols."
+            ),
+            healthierAlternativeIds: [],
+            isFavorite: false,
+            lastScannedAt: nil,
+            nutriScoreGrade: "B",
+            novaGroup: 2
         )
     ]
 }

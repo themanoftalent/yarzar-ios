@@ -80,6 +80,14 @@ enum AdditiveConcentrationTier: String, CaseIterable, Codable, Hashable {
     case minor = "Minor (0.5–2%)"
     case significant = "Significant (>2%)"
 
+    var shortTitle: String {
+        switch self {
+        case .trace: return "Trace (<0.5%)"
+        case .minor: return "Minor (0.5–2%)"
+        case .significant: return "High (>2%)"
+        }
+    }
+
     var doseMultiplier: Double {
         switch self {
         case .trace: return 0.55
@@ -95,7 +103,7 @@ struct AdditiveItem: Identifiable, Codable, Equatable, Hashable {
     let name: String
     let functionCategory: String
     let riskLevel: AdditiveRiskLevel
-    let concentrationTier: AdditiveConcentrationTier
+    var concentrationTier: AdditiveConcentrationTier
     let scientificSummary: String
     let regulatoryNote: String
     let isEndocrineDisruptor: Bool
@@ -111,7 +119,7 @@ struct ScoreBreakdown: Codable, Equatable, Hashable {
 
 struct WholeFoodProfile: Codable, Equatable, Hashable {
     let glycemicIndex: Int
-    let pesticideCategory: String      // e.g. "Clean Fifteen (Very Low Residue)" or "Dirty Dozen (Wash or Buy Organic)"
+    let pesticideCategory: String
     let seasonality: String
     let keyMicronutrients: [String]
     let bestPreparationTip: String
@@ -151,19 +159,25 @@ struct ProductItem: Identifiable, Codable, Equatable, Hashable {
     let category: String
     let domain: ProductDomain
     let emojiIcon: String
-    let isOrganic: Bool
-    let breakdown: ScoreBreakdown
+    var isOrganic: Bool
+    var breakdown: ScoreBreakdown
     let nutrients: [NutrientMetric]
-    let additives: [AdditiveItem]
+    var additives: [AdditiveItem]
     let ingredientsText: String
     let containsGluten: Bool
     let containsLactose: Bool
     let containsPalmOil: Bool
     let isVegan: Bool
     let wholeFoodProfile: WholeFoodProfile?
-    let healthierAlternativeIds: [String]
+    var healthierAlternativeIds: [String]
     var isFavorite: Bool = false
     var lastScannedAt: Date? = nil
+    var imageURL: String? = nil
+    var nutriScoreGrade: String? = nil
+    var novaGroup: Int? = nil
+    var ecoScoreGrade: String? = nil
+    var servingSize: String? = nil
+    var categoryTag: String? = nil
 
     var totalScore: Int {
         breakdown.totalScore

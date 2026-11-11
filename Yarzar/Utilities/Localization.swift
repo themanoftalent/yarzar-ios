@@ -187,6 +187,19 @@ final class LanguageManager: ObservableObject {
         "Select Product": "Ürün Seç",
         "Stop Camera": "Kamerayı Durdur",
         "Start Live Camera": "Canlı Kamerayı Başlat",
+        "Search / Lookup": "Ara / Sorgula",
+        "Enter EAN/UPC barcode OR search any product/brand (e.g. Nutella, Ülker, CeraVe, Pınar)...": "EAN/UPC barkodu girin VEYA herhangi bir ürün/marka arayın (ör. Nutella, Ülker, CeraVe, Pınar)...",
+        "Live OpenFacts Database Results": "Canlı OpenFacts Veritabanı Sonuçları",
+        "Search 3,000,000+ real products on OpenFoodFacts & OpenBeautyFacts...": "OpenFoodFacts ve OpenBeautyFacts üzerindeki 3.000.000+ gerçek üründe ara...",
+        "Search Online": "Çevrimiçi Ara",
+        "Searching…": "Aranıyor…",
+        "Clear Results": "Sonuçları Temizle",
+        "Adjust additive concentration tier below to see real-time dose-weighted score impact.": "Gerçek zamanlı doz ağırlıklı puan etkisini görmek için aşağıdaki katkı kullanım oranını değiştirin.",
+        "High (>2%)": "Yüksek (>%2)",
+        "Organic (+10 pts)": "Organik (+10 puan)",
+        "Set Organic": "Organik Yap",
+        "Recently Scanned & Inspected": "Son Taranan ve İncelenenler",
+        "Reference Benchmarks (Food, Cosmetics & Whole Foods)": "Referans Ölçütleri (Gıda, Kozmetik ve Doğal Besinler)",
     ]
 }
 
