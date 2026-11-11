@@ -1,0 +1,237 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXFileReference section */
+		14F5EF0B2F99236F00D1FB94 /* Yarzar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Yarzar.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		14F5EF0D2F99236F00D1FB94 /* Yarzar */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Yarzar;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		14F5EF082F99236F00D1FB94 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		14F5EF022F99236F00D1FB94 = {
+			isa = PBXGroup;
+			children = (
+				14F5EF0D2F99236F00D1FB94 /* Yarzar */,
+				14F5EF0C2F99236F00D1FB94 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		14F5EF0C2F99236F00D1FB94 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				14F5EF0B2F99236F00D1FB94 /* Yarzar.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		14F5EF0A2F99236F00D1FB94 /* Yarzar */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 14F5EF302F99237000D1FB94 /* Build configuration list for PBXNativeTarget "Yarzar" */;
+			buildPhases = (
+				14F5EF072F99236F00D1FB94 /* Sources */,
+				14F5EF082F99236F00D1FB94 /* Frameworks */,
+				14F5EF092F99236F00D1FB94 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				14F5EF0D2F99236F00D1FB94 /* Yarzar */,
+			);
+			name = Yarzar;
+			packageProductDependencies = (
+			);
+			productName = Yarzar;
+			productReference = 14F5EF0B2F99236F00D1FB94 /* Yarzar.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		14F5EF032F99236F00D1FB94 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1620;
+				LastUpgradeCheck = 1620;
+				TargetAttributes = {
+					14F5EF0A2F99236F00D1FB94 = {
+						CreatedOnToolsVersion = 16.2;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 14F5EF062F99236F00D1FB94 /* Build configuration list for PBXProject "Yarzar" */;
+			developmentRegion = "en";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"tr",
+			);
+			mainGroup = 14F5EF022F99236F00D1FB94;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 14F5EF0C2F99236F00D1FB94 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				14F5EF0A2F99236F00D1FB94 /* Yarzar */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		14F5EF092F99236F00D1FB94 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		14F5EF072F99236F00D1FB94 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		14F5EF2E2F99237000D1FB94 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		14F5EF2F2F99237000D1FB94 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		14F5EF312F99237000D1FB94 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Yarzar uses the camera to scan food and cosmetic barcodes and ingredient labels.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Yarzar analyzes product and ingredient photos using Apple Vision OCR.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.themanoftalent.yarzar.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		14F5EF322F99237000D1FB94 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Yarzar uses the camera to scan food and cosmetic barcodes and ingredient labels.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Yarzar analyzes product and ingredient photos using Apple Vision OCR.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.themanoftalent.yarzar.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		14F5EF062F99236F00D1FB94 /* Build configuration list for PBXProject "Yarzar" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				14F5EF2E2F99237000D1FB94 /* Debug */,
+				14F5EF2F2F99237000D1FB94 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		14F5EF302F99237000D1FB94 /* Build configuration list for PBXNativeTarget "Yarzar" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				14F5EF312F99237000D1FB94 /* Debug */,
+				14F5EF322F99237000D1FB94 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 14F5EF032F99236F00D1FB94 /* Project object */;
+}
